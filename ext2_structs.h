@@ -133,5 +133,6 @@ typedef struct {
   uint16_t rec_len;
   char name_len;
   char file_type;
+  char file_name[1];
 } __attribute__((packed)) dir_entry;
 #endif

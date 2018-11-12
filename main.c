@@ -149,6 +149,7 @@ char** get_dir_listing(uint32_t inode_num) {
     }
     names[num_entries_used]=malloc(current_entry->name_len+1);
     strcpy(names[num_entries_used],current_entry->file_name);
+    names[num_entries_used][current_entry->name_len]='\0';
     num_entries_used++;
     tot_size+=current_entry->rec_len;
     current_entry=(dir_entry*)(((uint64_t)current_entry)+current_entry->rec_len);
@@ -189,6 +190,38 @@ dir_entry* read_dir_entry(uint32_t inode_num,uint32_t dir_entry_num) {
   return NULL;
 }
 
+uint32_t inode_for_fname(uint32_t dir_inode_num, char* name, char* got_inode) {
+  uint32_t inode=0;
+  *got_inode=0;
+  char** names=get_dir_listing(dir_inode_num);
+  for(int i=0;names[i]!=NULL;i++) {
+    if (strcmp(names[i],name)==0) {
+      dir_entry* entry=read_dir_entry(dir_inode_num,i);
+      inode=entry->inode;
+      *got_inode=1;
+      break;
+    }
+  }
+  free_dir_listing(names);
+  return inode;
+}
+
+char* fname_for_inode(uint32_t dir_inode_num, uint32_t inode_num) {
+  for(int i=0;;i++) {
+    dir_entry* entry=read_dir_entry(dir_inode_num,i);
+    if (entry) {
+      if (entry->inode==inode_num) {
+        char* name=malloc(strlen(entry->file_name)+1);
+        strcpy(name,entry->file_name);
+        return name;
+      }
+    } else {
+      break;
+    }
+  }
+  return NULL;
+}
+
 int main() {
   FILE* f=fopen("ext2.img","rb");
   if (f) {
@@ -199,22 +232,20 @@ int main() {
   blk_size=1024<<(supblk->s_log_blk_size);
   double num_blk_grps_dbl=supblk->s_blocks_count/(double)supblk->s_blocks_per_group;
   uint32_t num_blk_grps=ceil(num_blk_grps_dbl);
-  show_supblk_info(num_blk_grps);
+  // show_supblk_info(num_blk_grps);
   blk_grps=malloc(sizeof(blk_grp*)*num_blk_grps);
   blk_grp* blk_group=read_blk(2);
   for (int i=0;i<num_blk_grps;i++) {
-    printf("Block group %d:\n",i);
-    printf("Number of unallocated blocks:%d\n",blk_group->bg_free_blocks_count);
-    printf("Number of unallocated inodes:%d\n",blk_group->bg_free_inodes_count);
     blk_grps[i]=blk_group;
     blk_group++;
   };
   uint32_t cwi=2;
   while(1) {
     printf(">");
-    char cmd[256];
-    fgets(cmd,256,stdin);
-    cmd[strlen(cmd)-1]='\0';
+    char line[256];
+    fgets(line,256,stdin);
+    line[strlen(line)-1]='\0';
+    char* cmd=strtok(line," ");
     if (strcmp(cmd,"ls")==0) {
       char** names=get_dir_listing(cwi);
       for(int i=0;names[i]!=NULL;i++) {
@@ -222,42 +253,46 @@ int main() {
       }
       printf("\n");
       free_dir_listing(names);
-    } else {
-      uint32_t inode;
-      char got_inode=0;
-      char** names=get_dir_listing(cwi);
-      for(int i=0;names[i]!=NULL;i++) {
-        if (strcmp(names[i],cmd)==0) {
-          dir_entry* entry=read_dir_entry(2,i);
-          inode=entry->inode;
-          got_inode=1;
-          break;
-        }
-      }
-      free_dir_listing(names);
+    } else if (strcmp(cmd,"inode")==0) {
+      char* name=strtok(NULL," ");
+      char got_inode;
+      uint32_t inode=inode_for_fname(cwi,name,&got_inode);
       if (got_inode) {
-        printf("Inode for %s:%d\n",cmd,inode);
+        printf("Inode for %s:%d\n",name,inode);
       } else {
-        printf("No such file or directory %s\n",cmd);
+        printf("inode: %s: No such file or directory\n",name);
       }
+    } else if (strcmp(cmd,"cd")==0) {
+      char* name=strtok(NULL," ");
+      char got_inode;
+      uint32_t inode_num=inode_for_fname(cwi,name,&got_inode);
+      if (got_inode) {
+        inode dir_inode=read_inode(inode_num);
+        if ((dir_inode.i_mode&EXT2_S_IFDIR)!=0) {
+          cwi=inode_num;
+        } else {
+          printf("cd: %s: Not a directory\n",name);
+        }
+      } else {
+        printf("cd: %s: No such file or directory\n",name);
+      }
+    } else if (strcmp(cmd,"pwi")==0) {
+      printf("%d\n",cwi);
+    } else if (strcmp(cmd,"cat")==0) {
+      char* name=strtok(NULL," ");
+      char got_inode;
+      uint32_t inode_num=inode_for_fname(cwi,name,&got_inode);
+      if (got_inode) {
+        inode file_inode=read_inode(inode_num);
+        char* contents=read_blk(file_inode.i_block[0]);
+        printf("%s",contents);
+      } else {
+        printf("type: %s: No such file or directory\n",name);
+      }
+    } else if (strcmp(cmd,"quit")==0) {
+      exit(0);
+    } else {
+      printf("%s: Comand not found\n",cmd);
     }
   }
-  // printf("lost+found:\n");
-  // inode lost_dir_inode=read_inode(11);
-  // show_inode_info(lost_dir_inode);
-  // printf("Block:%d\n",lost_dir_inode.i_block[0]);
-  // dir_entry* lost_dir=read_blk(lost_dir_inode.i_block[0]);
-  // current_entry=lost_dir;
-  // for(int i=0;;i++) {
-  //   if (current_entry->file_type==0) {
-  //     break;
-  //   }
-  //   printf("Directory entry %d:\n",i);
-  //   printf("Directory entry inode:%d\n",current_entry->inode);
-  //   printf("Length of entry:%d\n",current_entry->rec_len);
-  //   printf("Length of name:%d\n",current_entry->name_len);
-  //   printf("File type:%d\n",current_entry->file_type);
-  //   printf("File name:%s\n",(char*)current_entry+sizeof(dir_entry));
-  //   current_entry=(dir_entry*)(((uint64_t)current_entry)+current_entry->rec_len);
-  // }
 }
